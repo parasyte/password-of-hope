@@ -1,0 +1,11 @@
+[package]
+name = "poh"
+description = "Password generator for The Sword of Hope"
+version = "0.1.0"
+edition = "2024"
+license = "MIT-0"
+
+[dependencies]
+bitflags = "2"
+onlyargs = "0.2"
+onlyargs_derive = "0.2"
