@@ -3,14 +3,50 @@
 //! Generate and decode any password for The Sword of Hope.
 
 use bitflags::bitflags;
+use colorz::{Colorize as _, mode::set_coloring_mode_from_env};
+use error_iter::ErrorIter as _;
 use onlyargs::OnlyArgs;
 use onlyargs_derive::OnlyArgs;
-use std::fmt;
+use onlyerror::Error;
+use std::io::{self, Write};
+use std::{fmt, process::ExitCode};
 
 const CHARSET: &str = "BCDFGHJKLMNPQRSTVWXYZ∞▽△12345ΛΩΞ";
 const DIFFS: &[u8] = &[
     0x00, 0x05, 0x10, 0x07, 0x08, 0x06, 0x14, 0x09, 0x13, 0x07, 0x11, 0xa, 0x03, 0x16, 0x08, 0x15,
 ];
+const PASSWORD_LENGTH: usize = 16;
+const PASSWORD_STATE_LENGTH: usize = 10;
+
+#[derive(Debug, Error)]
+enum Error {
+    /// CLI error
+    Cli(#[from] onlyargs::CliError),
+
+    /// Invalid password character
+    #[error("Invalid password character: `{0}`")]
+    InvalidCharacter(char),
+
+    /// Invalid password checksum
+    InvalidChecksum,
+
+    /// Password requires 16 characters
+    PasswordLength,
+
+    /// Password state requires 9 bytes
+    StateLength,
+
+    /// Invalid hex digits
+    #[error("Invalid hex digits: `{0}`")]
+    InvalidHex(String),
+}
+
+impl Error {
+    /// Check if the error was caused by CLI inputs.
+    fn is_cli(&self) -> bool {
+        matches!(self, Self::Cli(_))
+    }
+}
 
 /// Password Character Set:
 ///
@@ -35,26 +71,47 @@ struct Args {
     verbose: bool,
 }
 
-fn main() -> Result<(), onlyargs::CliError> {
+fn main() -> ExitCode {
+    set_coloring_mode_from_env();
+
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            if error.is_cli() {
+                let _ = writeln!(io::stderr(), "{}", Args::HELP);
+            }
+
+            let _ = writeln!(io::stderr(), "{}: {error}", "Error".bright_red());
+            for source in error.sources().skip(1) {
+                let _ = writeln!(io::stderr(), "  {}: {source}", "Caused by".bright_yellow());
+            }
+
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), Error> {
     let args: Args = onlyargs::parse()?;
 
     if args.decode.is_none() && args.encode.is_none() {
         Args::help();
     }
 
+    let mut stdout = io::stdout();
     if let Some(password) = args.decode {
-        decoder(&password, args.verbose);
+        decoder(&mut stdout, &password, args.verbose)?;
     }
     if let Some(state) = args.encode {
-        encoder(&state, args.verbose);
+        encoder(&mut stdout, &state, args.verbose)?;
     }
 
     Ok(())
 }
 
 /// Attempt to decode and validate a password.
-fn decoder(password: &str, verbose: bool) {
-    let mut base32 = [0_u8; 10];
+fn decoder<W: Write>(writer: &mut W, password: &str, verbose: bool) -> Result<(), Error> {
+    let mut base32 = [0_u8; PASSWORD_STATE_LENGTH];
     let mut bit_index = 0;
     let mut ch1 = 0;
     let mut i = 0;
@@ -70,13 +127,14 @@ fn decoder(password: &str, verbose: bool) {
         };
         if ch == ' ' {
             continue;
+        } else if i >= PASSWORD_LENGTH {
+            return Err(Error::PasswordLength);
         }
 
-        if !CHARSET.contains(ch) {
-            panic!("password contains invalid character");
-        }
-
-        let ch = CHARSET.chars().position(|chr| chr == ch).unwrap() as u8;
+        let Some(ch) = CHARSET.chars().position(|chr| chr == ch) else {
+            return Err(Error::InvalidCharacter(ch));
+        };
+        let ch = ch as u8;
         let diff = DIFFS[i];
         let input = if diff > 0 {
             deobfuscate(ch1, ch, diff)
@@ -90,31 +148,35 @@ fn decoder(password: &str, verbose: bool) {
         bit_index += 5;
         i += 1;
     }
-    assert_eq!(i, 16, "password requires 16 characters");
+    if i != PASSWORD_LENGTH {
+        return Err(Error::PasswordLength);
+    }
 
     let chk = checksum(&base32);
     if verbose {
-        print!("Decoded: ");
+        let _ = write!(writer, "Decoded: ");
         for byte in &base32 {
-            print!("{byte:02x} ");
+            let _ = write!(writer, "{byte:02x} ");
         }
-        println!();
+        let _ = writeln!(writer);
 
-        println!("Checksum: {:02x}", chk);
+        let _ = writeln!(writer, "Checksum: {:02x}", chk);
     }
 
-    if chk == base32[0] {
-        print!("State: ");
-        for byte in &base32[1..] {
-            print!("{byte:02x} ");
-        }
-        println!();
-
-        println!();
-        println!("{}", State::from(&base32[..]));
-    } else {
-        println!("ERROR: Invalid password checksum");
+    if chk != base32[0] {
+        return Err(Error::InvalidChecksum);
     }
+
+    let _ = write!(writer, "State: ");
+    for byte in &base32[1..] {
+        let _ = write!(writer, "{byte:02x} ");
+    }
+    let _ = writeln!(writer);
+
+    let _ = writeln!(writer);
+    let _ = writeln!(writer, "{}", State::from(&base32[..]));
+
+    Ok(())
 }
 
 /// Packs 5-bit characters into 8-bit bytes.
@@ -138,70 +200,78 @@ fn deobfuscate(ch1: u8, ch: u8, diff: u8) -> u8 {
 }
 
 /// Encode password state into a valid password.
-fn encoder(state: &str, verbose: bool) {
-    let mut base32 = [0; 10];
+fn encoder<W: Write>(writer: &mut W, state: &str, verbose: bool) -> Result<(), Error> {
+    let mut base32 = [0; PASSWORD_STATE_LENGTH];
     let mut i = 0;
     let mut pos = 1;
-    while pos < 10 {
+    while pos < PASSWORD_STATE_LENGTH {
         if state.get(i..i + 1) == Some(" ") {
             i += 1;
 
             continue;
         }
 
-        let octet = state
-            .get(i..i + 2)
-            .expect("state requires 9 hexadecimal bytes");
-        base32[pos] = u8::from_str_radix(octet, 16).expect("state must only contain hex digits");
+        let Some(octet) = state.get(i..i + 2) else {
+            return Err(Error::StateLength);
+        };
+        let Ok(byte) = u8::from_str_radix(octet, 16) else {
+            return Err(Error::InvalidHex(octet.to_string()));
+        };
+        base32[pos] = byte;
 
         pos += 1;
         i += 2;
     }
+    if !matches!(state.get(i..).map(|tail| tail.trim()), None | Some("")) {
+        return Err(Error::StateLength);
+    }
 
     base32[0] = checksum(&base32);
     if verbose {
-        println!("Checksum: {:02x}", base32[0]);
+        let _ = writeln!(writer, "Checksum: {:02x}", base32[0]);
     }
 
-    print!("State: ");
+    let _ = write!(writer, "State: ");
     for byte in &base32[1..] {
-        print!("{byte:02x} ");
+        let _ = write!(writer, "{byte:02x} ");
     }
-    println!();
+    let _ = writeln!(writer);
 
-    println!();
-    println!("{}", State::from(&base32[..]));
+    let _ = writeln!(writer);
+    let _ = writeln!(writer, "{}", State::from(&base32[..]));
 
     let mut decoded = decode_b32(&base32);
     if verbose {
-        print!("Decoded: ");
+        let _ = write!(writer, "Decoded: ");
         for byte in &decoded {
-            print!("{byte:02x} ");
+            let _ = write!(writer, "{byte:02x} ");
         }
-        println!();
+        let _ = writeln!(writer);
     }
 
     obfuscate(&mut decoded);
     if verbose {
-        print!("Obfuscated: ");
+        let _ = write!(writer, "Obfuscated: ");
         for byte in &decoded {
-            print!("{byte:02x} ");
+            let _ = write!(writer, "{byte:02x} ");
         }
-        println!();
+        let _ = writeln!(writer);
     }
 
-    print!("Password: ");
+    let _ = write!(writer, "Password: ");
     for (i, byte) in decoded.iter().enumerate() {
         if i > 0 && (i % 4) == 0 {
-            print!(" ");
+            let _ = write!(writer, " ");
         }
 
         let pos = *byte as usize;
         let ch = CHARSET.chars().nth(pos).unwrap();
 
-        print!("{ch}");
+        let _ = write!(writer, "{ch}");
     }
-    println!();
+    let _ = writeln!(writer);
+
+    Ok(())
 }
 
 /// Unpacks 5-bit characters from 8-bit bytes.
@@ -550,5 +620,73 @@ impl fmt::Display for Events {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use io::Cursor;
+
+    fn get_password(cursor: Cursor<Vec<u8>>) -> String {
+        let bytes = cursor.into_inner();
+        str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap()
+            .strip_prefix("Password: ")
+            .unwrap()
+            .to_string()
+    }
+
+    fn get_state(cursor: Cursor<Vec<u8>>) -> String {
+        let bytes = cursor.into_inner();
+        str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .strip_prefix("State: ")
+            .unwrap()
+            .trim_end()
+            .to_string()
+    }
+
+    #[test]
+    fn test_round_trip() {
+        let state = "00 00 00 00 00 00 00 00 00";
+
+        let mut output = Cursor::new(Vec::new());
+        encoder(&mut output, state, false).unwrap();
+        let password = get_password(output);
+
+        let mut output = Cursor::new(Vec::new());
+        decoder(&mut output, &password, false).unwrap();
+        let decoded = get_state(output);
+
+        assert_eq!(decoded, state);
+    }
+
+    #[test]
+    fn test_encoder() {
+        let state = "00 0f ff ff e7 ff ff e0 00";
+
+        let mut output = Cursor::new(Vec::new());
+        encoder(&mut output, state, false).unwrap();
+        let password = get_password(output);
+
+        assert_eq!(password, "3KNC CΞRD MBNF 5LDT");
+    }
+
+    #[test]
+    fn test_decoder() {
+        let password = "3KNC CΞRD MBNF 5LDT";
+
+        let mut output = Cursor::new(Vec::new());
+        decoder(&mut output, password, false).unwrap();
+        let state = get_state(output);
+
+        assert_eq!(state, "00 0f ff ff e7 ff ff e0 00");
     }
 }

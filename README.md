@@ -2,7 +2,7 @@
 
 A password decoder and generator for the classic GameBoy RPG, The Sword of Hope.
 
-The source code includes a full description (to the best of my knowledge) the internal password format.
+The source code includes a full description (to the best of my knowledge) of the internal password format.
 
 The strongest password I've found online puts you at level 28 without the full inventory. This tool allows generating passwords for levels up to 32, put anything in your inventory, and choose which events have been completed.
 

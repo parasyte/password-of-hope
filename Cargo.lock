@@ -9,6 +9,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
+name = "colorz"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ceb37c5798821e37369cb546f430f19da2f585e0364c9615ae340a9f2e6067b"
+
+[[package]]
+name = "error-iter"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8070547d90d1b98debb6626421d742c897942bbb78f047694a5eb769495eccd6"
+
+[[package]]
 name = "myn"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -31,10 +43,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "onlyerror"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f0c9c18fd5c5a2c580df757c1a0bc5058fa4b1db1e1823c6692d7c7d5a09ff0"
+dependencies = [
+ "myn",
+]
+
+[[package]]
 name = "poh"
 version = "0.1.0"
 dependencies = [
  "bitflags",
+ "colorz",
+ "error-iter",
  "onlyargs",
  "onlyargs_derive",
+ "onlyerror",
 ]
