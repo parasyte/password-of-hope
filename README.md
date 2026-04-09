@@ -8,7 +8,7 @@ The strongest password I've found online puts you at level 28 without the full i
 
 Most of the events are undocumented at the moment (labeled "unknown"). And the state input is naive, only accepting raw hexadecimal.
 
-Most of the error handling was left out, so there are generally panics instead of nice error messages. I wasn't sure if I wanted to publish this. But since I don't think this work has been done before, it seems like something that might be interesting to a few people.
+I wasn't sure if I wanted to publish this. But since I don't think this work has been done before, it seems like something that might be interesting to a few people.
 
 ## Disassembly
 
